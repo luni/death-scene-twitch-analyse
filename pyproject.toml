@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "live-deathcount"
+version = "0.1.0"
+description = ""
+authors = ["lunix <lunix@mirkx.org>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+streamlink = "^7.1.1"
+twitchio = "^2.10.0"
+asyncio = "^3.4.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[[tool.poetry.source]]
+name = "piwheels"
+url = "https://www.piwheels.org/simple/"

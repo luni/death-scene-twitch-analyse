@@ -1,0 +1,10 @@
+{
+    "bot": {
+        "token": "oauth:XXXXXXXXXXXXXXXXXXXXXx",
+        "client_id": "XXXXXXXXXXXXXXXXXXXXXX",
+        "nick": "connectionlimit"
+    },
+    "channels": [
+        "kimtnt"
+    ]
+}
