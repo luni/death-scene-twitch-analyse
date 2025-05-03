@@ -1,31 +1,32 @@
 #!/usr/bin/python3
-import cv2
-import streamlink
 import asyncio
-from twitchio.ext import commands
-import logging
 import json
+import logging
 import time
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+import cv2
+import streamlink
+from twitchio.ext import commands
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 class Bot(commands.Bot):
-    def __init__(self, message_queue: asyncio.Queue, config: dict):
+    def __init__(self, message_queue: asyncio.Queue, config: dict) -> None:
         super().__init__(
             token=config["bot"]["token"],  # Replace with your OAuth token
-            client_id=config["bot"]["client_id"],      # Replace with your Client ID
-            nick=config["bot"]["nick"],     # Replace with your Twitch username
-            prefix='!',                      # Command prefix (optional)
-            initial_channels=config["channels"]  # Replace with the channel you want to join
+            client_id=config["bot"]["client_id"],  # Replace with your Client ID
+            nick=config["bot"]["nick"],  # Replace with your Twitch username
+            prefix="!",  # Command prefix (optional)
+            initial_channels=config["channels"],  # Replace with the channel you want to join
         )
         self.message_queue = message_queue
 
-    async def event_ready(self):
+    async def event_ready(self) -> None:
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
 
-    async def send_from_queue(self):
+    async def send_from_queue(self) -> None:
         while True:
             try:
                 # Attempt to get a message without blocking
@@ -43,7 +44,7 @@ class Bot(commands.Bot):
 
 # Load all template images
 templates = {
-    #"death_scene_1": cv2.resize(cv2.imread("death1.png", cv2.IMREAD_GRAYSCALE), (640, 360)),
+    # "death_scene_1": cv2.resize(cv2.imread("death1.png", cv2.IMREAD_GRAYSCALE), (640, 360)),
     "death_scene_1": cv2.resize(cv2.imread("kritischer_fehler.png", cv2.IMREAD_GRAYSCALE), (640, 360)),
     # "death_scene_2": cv2.imread("death_scene_2.jpg", cv2.IMREAD_GRAYSCALE),
     # "death_scene_3": cv2.imread("death_scene_3.jpg", cv2.IMREAD_GRAYSCALE),
@@ -57,7 +58,7 @@ thresholds = {
 }
 
 
-def stream_to_url(url, quality='best'):
+def stream_to_url(url: str, quality: str = "best") -> str:
     streams = streamlink.streams(url)
     if streams:
         return streams[quality].to_url()
@@ -65,7 +66,7 @@ def stream_to_url(url, quality='best'):
     raise ValueError("No steams were available")
 
 
-def opencv_task(message_queue, url, quality='360p30'):
+def opencv_task(message_queue: asyncio.Queue, url: str, quality: str = "360p30") -> None:
     logging.info(f"Connecting to {url}")
     stream_url = stream_to_url(url, quality)
     # Open the video stream
@@ -140,8 +141,8 @@ def opencv_task(message_queue, url, quality='360p30'):
     video_stream.release()
 
 
-async def main():
-    with open("config.json", "r") as f:
+async def main() -> None:
+    with open("config.json") as f:
         config = json.load(f)
 
     loop = asyncio.get_event_loop()
@@ -152,10 +153,16 @@ async def main():
     asyncio.create_task(bot.send_from_queue())
 
     # Run OpenCV in a separate thread with arguments
-    loop.run_in_executor(None, opencv_task, message_queue, "https://www.twitch.tv/" + config["channels"][0])
+    loop.run_in_executor(
+        None,
+        opencv_task,
+        message_queue,
+        "https://www.twitch.tv/" + config["channels"][0],
+    )
 
     # Start the bot
     await bot.start()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
