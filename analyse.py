@@ -133,7 +133,7 @@ def opencv_task(message_queue: asyncio.Queue, url: str, quality: str = "360p30")
                 death_counter += 1
                 logging.info(f"Death Counter: {death_counter}")
                 # message_queue.put_nowait("!rip")
-                cv2.imwrite("%d_%s_%s.png" % (death_counter, name, frame_count), frame)  # Save the frame", frame)
+                cv2.imwrite(f"{death_counter}_{name}_{frame_count}.png", frame)
                 still_screen_present = True
             else:
                 still_screen_present = False
