@@ -2,6 +2,8 @@
     "bot": {
         "token": "oauth:XXXXXXXXXXXXXXXXXXXXXx",
         "client_id": "XXXXXXXXXXXXXXXXXXXXXX",
+        "client_secret": "XXXXXXXXXXXXXXXXXXXXXX",
+        "bot_id": "123456789",
         "nick": "connectionlimit"
     },
     "channels": [

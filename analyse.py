@@ -3,22 +3,88 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
+from typing import Any
 
 import cv2
 import streamlink
 from twitchio.ext import commands
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+TEMPLATE_FILES = {"death_scene_1": Path("kritischer_fehler.png")}
+TEMPLATE_THRESHOLDS = {"death_scene_1": 0.65}
+TEMPLATE_SIZE = (640, 360)
+FRAME_LOG_INTERVAL = 1_000
+DETECTION_OUTPUT_DIR = Path("detections")
+DETECTION_OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+def load_config(path: Path = Path("config.json")) -> dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    with path.open() as config_file:
+        config: dict[str, Any] = json.load(config_file)
+
+    bot_cfg = config.get("bot")
+    if not isinstance(bot_cfg, dict):
+        raise ValueError("Config must contain a 'bot' section.")
+
+    required_bot_keys = ["token", "client_id", "client_secret", "bot_id", "nick"]
+    missing = [key for key in required_bot_keys if not bot_cfg.get(key)]
+    if missing:
+        raise ValueError(f"Missing bot config values: {', '.join(missing)}")
+
+    channels = config.get("channels")
+    if not channels:
+        raise ValueError("Config must include at least one channel entry in 'channels'.")
+
+    return config
+
+
+def load_templates(template_files: dict[str, Path], size: tuple[int, int]) -> dict[str, Any]:
+    templates: dict[str, Any] = {}
+    for name, file_path in template_files.items():
+        if not file_path.exists():
+            raise FileNotFoundError(f"Template '{name}' not found at {file_path}")
+
+        template = cv2.imread(str(file_path), cv2.IMREAD_GRAYSCALE)
+        if template is None:
+            raise ValueError(f"Unable to read template '{name}' from {file_path}")
+
+        templates[name] = cv2.resize(template, size)
+
+    return templates
+
+
+def stream_to_url(url: str, quality: str = "best") -> str:
+    streams = streamlink.streams(url)
+    if not streams:
+        raise ValueError(f"No streams available for {url}")
+
+    if quality not in streams:
+        available = ", ".join(streams.keys())
+        raise ValueError(
+            f"Quality '{quality}' not available for {url}. Available qualities: {available}"
+        )
+
+    return streams[quality].to_url()
 
 
 class Bot(commands.Bot):
-    def __init__(self, message_queue: asyncio.Queue, config: dict) -> None:
+    def __init__(self, message_queue: asyncio.Queue[str], config: dict[str, Any]) -> None:
+        bot_cfg = config["bot"]
         super().__init__(
-            token=config["bot"]["token"],  # Replace with your OAuth token
-            client_id=config["bot"]["client_id"],  # Replace with your Client ID
-            nick=config["bot"]["nick"],  # Replace with your Twitch username
-            prefix="!",  # Command prefix (optional)
-            initial_channels=config["channels"],  # Replace with the channel you want to join
+            token=bot_cfg["token"],
+            client_id=bot_cfg["client_id"],
+            client_secret=bot_cfg["client_secret"],
+            bot_id=bot_cfg["bot_id"],
+            owner_id=bot_cfg.get("owner_id"),
+            nick=bot_cfg["nick"],
+            prefix=bot_cfg.get("prefix", "!"),
+            initial_channels=config["channels"],
         )
         self.message_queue = message_queue
 
@@ -42,39 +108,17 @@ class Bot(commands.Bot):
             await asyncio.sleep(0.1)
 
 
-# Load all template images
-templates = {
-    # "death_scene_1": cv2.resize(cv2.imread("death1.png", cv2.IMREAD_GRAYSCALE), (640, 360)),
-    "death_scene_1": cv2.resize(cv2.imread("kritischer_fehler.png", cv2.IMREAD_GRAYSCALE), (640, 360)),
-    # "death_scene_2": cv2.imread("death_scene_2.jpg", cv2.IMREAD_GRAYSCALE),
-    # "death_scene_3": cv2.imread("death_scene_3.jpg", cv2.IMREAD_GRAYSCALE),
-}
-
-# Define thresholds for each template (if needed, otherwise use a default)
-thresholds = {
-    "death_scene_1": 0.65,
-    # "death_scene_2": 0.75,
-    # "death_scene_3": 0.85,
-}
-
-
-def stream_to_url(url: str, quality: str = "best") -> str:
-    streams = streamlink.streams(url)
-    if streams:
-        return streams[quality].to_url()
-
-    raise ValueError("No steams were available")
-
-
-def opencv_task(message_queue: asyncio.Queue, url: str, quality: str = "360p30") -> None:
-    logging.info(f"Connecting to {url}")
+def opencv_task(
+    message_queue: asyncio.Queue[str],
+    url: str,
+    templates: dict[str, Any],
+    thresholds: dict[str, float],
+    quality: str = "360p30",
+) -> None:
+    logger.info("Connecting to %s", url)
     stream_url = stream_to_url(url, quality)
-    # Open the video stream
-    video_stream = cv2.VideoCapture(stream_url)  # Replace with your live stream or video file
-    # foo
-    # video_stream = cv2.VideoCapture('Gammel of War ｜ !socials !spotify !podcast !merch 2024-12-30 15_28 [v2339748646].mp4')  # Replace with your live stream or video file
+    video_stream = cv2.VideoCapture(stream_url)
 
-    # Death counter
     death_counter = 0
     frame_skip = 0
     cooldown_frames = 30 * 30  # Skip the next 30 seconds after a detection
@@ -82,85 +126,78 @@ def opencv_task(message_queue: asyncio.Queue, url: str, quality: str = "360p30")
     still_screen_present = False
     skip_start = 0
     frame_count = 0
-    z = 0
+    since_log = 0
+
     while True:
         ret, frame = video_stream.read()
         if not ret:
-            logging.error("Stream ended or no frames received.")
+            logger.error("Stream ended or no frames received.")
             time.sleep(5)
             try:
                 stream_url = stream_to_url(url, quality)
-                # Open the video stream
-                video_stream = cv2.VideoCapture(stream_url)  # Replace with your live stream or video file
-            except Exception as e:
-                logging.error(e)
-
+                video_stream = cv2.VideoCapture(stream_url)
+            except Exception as exc:  # pragma: no cover - best effort reconnect
+                logger.error("Failed to reconnect to %s: %s", url, exc)
             continue
 
         frame_count += 1
         if cooldown > 0 and not still_screen_present:
             cooldown -= 1
 
-        z += 1
+        since_log += 1
         if (frame_skip > 0 and frame_count % frame_skip != 0) or frame_count <= skip_start:
             continue
 
-        if z >= 1000:
-            logging.info("frame %s", frame_count)
-            z = 0
+        if since_log >= FRAME_LOG_INTERVAL:
+            logger.info("Processing frame %s", frame_count)
+            since_log = 0
 
-        # Convert the frame to grayscale
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        # Loop through all templates
         for name, template in templates.items():
-            # template_width, template_height = template.shape[::-1]
-
-            # Perform template matching
             result = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
-            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
 
-            # Check if the best match exceeds the threshold
-            if max_val >= thresholds.get(name, 0.8):  # Default threshold 0.8 if not specified
-                logging.info(f"Detected: {name} with match value {max_val}")
-                if cooldown > 0:
-                    continue
-
-                cooldown = cooldown_frames  # Reset cooldown
-
-                # message_queue.put_nowait(f"Detected: {name} with match value {max_val}")
-                # Increment death counter
-                death_counter += 1
-                logging.info(f"Death Counter: {death_counter}")
-                # message_queue.put_nowait("!rip")
-                cv2.imwrite(f"{death_counter}_{name}_{frame_count}.png", frame)
-                still_screen_present = True
-            else:
+            threshold = thresholds.get(name, 0.8)
+            if max_val < threshold:
                 still_screen_present = False
+                continue
 
-    video_stream.release()
+            logger.info("Detected %s (match=%.3f, threshold=%.2f)", name, max_val, threshold)
+            if cooldown > 0:
+                continue
+
+            cooldown = cooldown_frames
+            death_counter += 1
+            logger.info("Death Counter: %s", death_counter)
+
+            detection_file = DETECTION_OUTPUT_DIR / f"{death_counter}_{name}_{frame_count}.png"
+            cv2.imwrite(str(detection_file), frame)
+            still_screen_present = True
+
+            if not message_queue.empty():
+                # Allow future enhancements that enqueue chat messages without blocking
+                break
 
 
 async def main() -> None:
-    with open("config.json") as f:
-        config = json.load(f)
+    config = load_config()
+    templates = load_templates(TEMPLATE_FILES, TEMPLATE_SIZE)
 
-    loop = asyncio.get_event_loop()
-    message_queue = asyncio.Queue()
-
-    # Run the Twitch bot
+    message_queue: asyncio.Queue[str] = asyncio.Queue()
     bot = Bot(message_queue=message_queue, config=config)
     asyncio.create_task(bot.send_from_queue())
 
-    # Run OpenCV in a separate thread with arguments
+    loop = asyncio.get_running_loop()
+    channel_url = f"https://www.twitch.tv/{config['channels'][0]}"
     loop.run_in_executor(
         None,
         opencv_task,
         message_queue,
-        "https://www.twitch.tv/" + config["channels"][0],
+        channel_url,
+        templates,
+        TEMPLATE_THRESHOLDS,
     )
 
-    # Start the bot
     await bot.start()
 
 
